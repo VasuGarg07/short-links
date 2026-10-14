@@ -2,23 +2,15 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, HttpUrl
 
-from utils import generate_slug
+from utils import generate_slug, get_db_conn
 
 
 class LinkRequest(BaseModel):
     url: HttpUrl
 
-
-class LinkResponse(BaseModel):
-    url: HttpUrl
-    slug: str
-    clicks: int
-
+MAX_SLUG_ATTEMPTS = 5
 
 app = FastAPI()
-
-# MOCK DB: in-memory list of LinkResponse records
-links_list: list[LinkResponse] = []
 
 
 @app.get("/")
@@ -27,32 +19,51 @@ def health() -> dict[str, str]:
 
 
 @app.post("/links", status_code=201)
-def create_link(request: LinkRequest, response: Response) -> dict[str, str | bool]:
-    for item in links_list:
-        if item.url == request.url:
+def create_link(request: LinkRequest, response: Response):
+    url = str(request.url)
+    with get_db_conn() as conn, conn.cursor() as cursor:
+        # Find if url already exists
+        cursor.execute("SELECT slug FROM links WHERE url = %s;", (url, ))
+        row = cursor.fetchone()
+        if row is not None:
+
+            # send existing entry with status_code 200
             response.status_code = 200
-            return {"slug": item.slug, "message": "Entry already exists"}
+            return {"slug": row[0], "message": "Entry already exists"}
 
-    slug = generate_slug()
-    links_list.append(LinkResponse(url=request.url, slug=slug, clicks=0))
+        # Create new entry. The slug is random, so it can (rarely) already be taken.
+        # ON CONFLICT DO NOTHING makes Postgres skip the insert and return no row
+        # instead of raising an error, and then we try again with a new slug.
+        for _ in range(MAX_SLUG_ATTEMPTS):
+            slug = generate_slug()
+            cursor.execute(
+                "INSERT INTO links (slug, url) VALUES (%s, %s) ON CONFLICT (slug) DO NOTHING RETURNING slug;",
+                (slug, url),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return {"slug": row[0], "message": "New entry created"}
 
-    return {"slug": slug, "message": "URL saved in DB"}
+        raise HTTPException(status_code=500, detail="Could not generate a unique slug")
 
 
 @app.get("/{slug}")
 def redirect_link(slug: str) -> RedirectResponse:
-    for item in links_list:
-        if item.slug == slug:
-            item.clicks += 1
-            return RedirectResponse(url=item.url, status_code=302)
+    with get_db_conn() as conn, conn.cursor() as cursor:
+        cursor.execute("UPDATE links SET clicks = clicks + 1 WHERE slug = %s RETURNING url;", (slug, ))
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Url Not Found")
 
-    raise HTTPException(status_code=404, detail="Url Not Found")
-
+        return RedirectResponse(url=row[0], status_code=302)
+            
 
 @app.get("/links/{slug}/stats")
-def get_link_stats(slug: str) -> LinkResponse:
-    for item in links_list:
-        if item.slug == slug:
-            return item
+def get_link_stats(slug: str):
+    with get_db_conn() as conn, conn.cursor() as cursor:
+        cursor.execute("SELECT id, url, clicks, created_at FROM links WHERE slug = %s;", (slug, ))
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Url Not Found")
 
-    raise HTTPException(status_code=404, detail="Url Not Found")
+        return {"id":row[0], "url":row[1], "clicks":row[2], "created_at":row[3]}
