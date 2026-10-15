@@ -1,9 +1,8 @@
 import logging
 from datetime import datetime
-from typing import Annotated
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Path, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, HttpUrl
 
@@ -32,7 +31,6 @@ app = FastAPI()
 def database_unavailable(
     request: Request, error: psycopg.OperationalError
 ) -> JSONResponse:
-    # 503 tells clients "try again later" instead of a 500 that looks like a bug in our code.
     logger.error("Database unavailable: %s", error)
     return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
 
