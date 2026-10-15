@@ -87,3 +87,16 @@ Added `frontend/`: a React + TypeScript + Vite page that shortens a link, lists 
 click counts, and copies the short URL. Only `fetch`, no router, state library or CSS
 framework. Vite forwards `/links` to FastAPI, so the browser talks to one origin and the
 backend needs no CORS setup. VS Code can debug the backend and the page together.
+
+## 2026-10-16: One-command start with Docker Compose
+Decision: `docker compose up --build` starts the whole app for someone who only cloned the repo.
+Three services: Postgres, the FastAPI backend, and the frontend (built, then served by nginx,
+which also forwards `/links` to the backend). The migration files are mounted into Postgres'
+init folder, so the table is created automatically on the first start. The backend waits for a
+Postgres health check, which uses TCP because Postgres also answers on a local socket while it
+is still running the init scripts. Decision: newcomers must create a `.env` file from
+`.env.example` (README step 2). Rejected: a local-only default password in the compose file,
+since it skips a good habit and puts a password in the repo. Compose now stops with a clear
+message if `DB_PASSWORD` is missing. Cost: one extra setup step, and migrations only run on an
+empty database, so a later migration needs `docker compose down -v` or a manual run. Written
+but not yet run end to end.
