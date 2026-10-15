@@ -22,27 +22,21 @@ def health() -> dict[str, str]:
 def create_link(request: LinkRequest, response: Response):
     url = str(request.url)
     with get_db_conn() as conn, conn.cursor() as cursor:
-        # Find if url already exists
-        cursor.execute("SELECT slug FROM links WHERE url = %s;", (url, ))
-        row = cursor.fetchone()
-        if row is not None:
-
-            # send existing entry with status_code 200
-            response.status_code = 200
-            return {"slug": row[0], "message": "Entry already exists"}
-
-        # Create new entry. The slug is random, so it can (rarely) already be taken.
-        # ON CONFLICT DO NOTHING makes Postgres skip the insert and return no row
-        # instead of raising an error, and then we try again with a new slug.
         for _ in range(MAX_SLUG_ATTEMPTS):
             slug = generate_slug()
             cursor.execute(
-                "INSERT INTO links (slug, url) VALUES (%s, %s) ON CONFLICT (slug) DO NOTHING RETURNING slug;",
+                "INSERT INTO links (slug, url) VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING slug;",
                 (slug, url),
             )
             row = cursor.fetchone()
             if row is not None:
                 return {"slug": row[0], "message": "New entry created"}
+
+            cursor.execute("SELECT slug FROM links WHERE url = %s;", (url,))
+            row = cursor.fetchone()
+            if row is not None:
+                response.status_code = 200
+                return {"slug": row[0], "message": "Url already exists"}
 
         raise HTTPException(status_code=500, detail="Could not generate a unique slug")
 
