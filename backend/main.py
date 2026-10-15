@@ -1,16 +1,40 @@
-from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import RedirectResponse
+import logging
+from datetime import datetime
+from typing import Annotated
+
+import psycopg
+from fastapi import FastAPI, HTTPException, Path, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, HttpUrl
 
 from utils import generate_slug, get_db_conn
+
+logger = logging.getLogger(__name__)
+
+MAX_SLUG_ATTEMPTS = 5
 
 
 class LinkRequest(BaseModel):
     url: HttpUrl
 
-MAX_SLUG_ATTEMPTS = 5
+
+class LinkStats(BaseModel):
+    id: int
+    url: str
+    clicks: int
+    created_at: datetime
+
 
 app = FastAPI()
+
+
+@app.exception_handler(psycopg.OperationalError)
+def database_unavailable(
+    request: Request, error: psycopg.OperationalError
+) -> JSONResponse:
+    # 503 tells clients "try again later" instead of a 500 that looks like a bug in our code.
+    logger.error("Database unavailable: %s", error)
+    return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
 
 
 @app.get("/")
@@ -19,7 +43,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/links", status_code=201)
-def create_link(request: LinkRequest, response: Response):
+def create_link(request: LinkRequest, response: Response) -> dict[str, str]:
     url = str(request.url)
     with get_db_conn() as conn, conn.cursor() as cursor:
         for _ in range(MAX_SLUG_ATTEMPTS):
@@ -44,20 +68,25 @@ def create_link(request: LinkRequest, response: Response):
 @app.get("/{slug}")
 def redirect_link(slug: str) -> RedirectResponse:
     with get_db_conn() as conn, conn.cursor() as cursor:
-        cursor.execute("UPDATE links SET clicks = clicks + 1 WHERE slug = %s RETURNING url;", (slug, ))
+        cursor.execute(
+            "UPDATE links SET clicks = clicks + 1 WHERE slug = %s RETURNING url;",
+            (slug,),
+        )
         row = cursor.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Url Not Found")
 
         return RedirectResponse(url=row[0], status_code=302)
-            
+
 
 @app.get("/links/{slug}/stats")
-def get_link_stats(slug: str):
+def get_link_stats(slug: str) -> LinkStats:
     with get_db_conn() as conn, conn.cursor() as cursor:
-        cursor.execute("SELECT id, url, clicks, created_at FROM links WHERE slug = %s;", (slug, ))
+        cursor.execute(
+            "SELECT id, url, clicks, created_at FROM links WHERE slug = %s;", (slug,)
+        )
         row = cursor.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Url Not Found")
 
-        return {"id":row[0], "url":row[1], "clicks":row[2], "created_at":row[3]}
+        return LinkStats(id=row[0], url=row[1], clicks=row[2], created_at=row[3])

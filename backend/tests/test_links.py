@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
+
 def test_posting_same_url_twice_returns_same_slug(client: TestClient) -> None:
     body = {"url": "https://example.com/page"}
 
@@ -13,14 +14,13 @@ def test_posting_same_url_twice_returns_same_slug(client: TestClient) -> None:
     assert second.json()["slug"] == first.json()["slug"]
 
 
-
 def test_simultaneous_clicks_are_all_counted(client: TestClient) -> None:
     created = client.post("/links", json={"url": "https://example.com/page"})
     slug = created.json()["slug"]
     CLICKS = 50
 
     def click(_: int) -> int:
-        return client.get(f"/{slug}", follow_redirects=False).status_code
+        return int(client.get(f"/{slug}", follow_redirects=False).status_code)
 
     with ThreadPoolExecutor(max_workers=CLICKS) as pool:
         statuses = list(pool.map(click, range(CLICKS)))
